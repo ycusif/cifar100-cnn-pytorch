@@ -1,73 +1,61 @@
-import copy
+# ============================================================
+# CIFAR-100 CNN Classifier - Version 2
+# Improved CNN with deeper convolutional blocks
+# ============================================================
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torchvision.transforms as transforms
 
 from torch.utils.data import DataLoader, Subset
-from torchvision.datasets import CIFAR100
+from torchvision import datasets, transforms
+
+import matplotlib.pyplot as plt
 
 
 # ============================================================
-# 1. CONFIGURATION
+# 1. Device
 # ============================================================
 
-device = torch.device(
-    "cuda" if torch.cuda.is_available() else "cpu"
-)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-BATCH_SIZE = 64
-NUM_EPOCHS = 50
-LEARNING_RATE = 0.0005
-WEIGHT_DECAY = 0.0005
-
-CIFAR100_MEAN = (0.5071, 0.4867, 0.4408)
-CIFAR100_STD = (0.2675, 0.2565, 0.2761)
+print(f"Using device: {device}")
 
 
 # ============================================================
-# 2. DATA TRANSFORMATIONS
+# 2. Normalization
 # ============================================================
 
-def define_transformations(mean, std):
-
-    train_transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomRotation(15),
-        transforms.ToTensor(),
-        transforms.Normalize(mean, std)
-    ])
-
-    val_test_transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(mean, std)
-    ])
-
-    return train_transform, val_test_transform
+mean = (0.5071, 0.4867, 0.4408)
+std = (0.2675, 0.2565, 0.2761)
 
 
 # ============================================================
-# 3. LOAD DATASETS
+# 3. Data Transforms
 # ============================================================
 
-train_transform, val_test_transform = define_transformations(
-    CIFAR100_MEAN,
-    CIFAR100_STD
-)
+# Augmentation used only for training
+train_transform = transforms.Compose([
+    transforms.RandomHorizontalFlip(),
+    transforms.RandomRotation(15),
+    transforms.ToTensor(),
+    transforms.Normalize(mean=mean, std=std)
+])
+
+
+# No augmentation for validation/test
+val_test_transform = transforms.Compose([
+    transforms.ToTensor(),
+    transforms.Normalize(mean=mean, std=std)
+])
 
 
 # ============================================================
-# 4. LOAD THE ORIGINAL TRAINING DATA
+# 4. Load CIFAR-100
 # ============================================================
 
-# This contains the official 50,000 CIFAR-100 training images.
-# We will split these into:
-#
-# 45,000 training images
-# 5,000 validation images
-
-train_dataset_augmented = CIFAR100(
+# Training dataset with augmentation
+train_dataset_augmented = datasets.CIFAR100(
     root="./data",
     train=True,
     download=True,
@@ -75,62 +63,18 @@ train_dataset_augmented = CIFAR100(
 )
 
 
-# We create another copy of the same 50,000 images,
-# but WITHOUT random augmentation.
-#
-# This dataset will be used for validation.
-
-train_dataset_clean = CIFAR100(
+# Same 50,000 training images, but without augmentation
+# This dataset is used to create the validation set.
+train_dataset_clean = datasets.CIFAR100(
     root="./data",
     train=True,
-    download=False,
+    download=True,
     transform=val_test_transform
 )
 
 
-# ============================================================
-# 5. CREATE TRAIN / VALIDATION SPLIT
-# ============================================================
-
-train_size = 45000
-val_size = 5000
-
-generator = torch.Generator().manual_seed(42)
-
-indices = torch.randperm(
-    len(train_dataset_augmented),
-    generator=generator
-).tolist()
-
-train_indices = indices[:train_size]
-val_indices = indices[train_size:]
-
-
-# Training subset uses augmentation
-train_dataset = Subset(
-    train_dataset_augmented,
-    train_indices
-)
-
-
-# Validation subset does NOT use augmentation
-val_dataset = Subset(
-    train_dataset_clean,
-    val_indices
-)
-
-
-# ============================================================
-# 6. LOAD THE OFFICIAL TEST SET
-# ============================================================
-
-# IMPORTANT:
-# This is the official CIFAR-100 test set.
-#
-# It is completely separate from training and validation.
-# We do NOT use it during training.
-
-test_dataset = CIFAR100(
+# Official CIFAR-100 test set
+test_dataset = datasets.CIFAR100(
     root="./data",
     train=False,
     download=True,
@@ -139,92 +83,109 @@ test_dataset = CIFAR100(
 
 
 # ============================================================
-# 7. DATA LOADERS
+# 5. Create Train / Validation Split
 # ============================================================
+
+train_size = 45000
+val_size = 5000
+
+# Fixed seed so the same split is created every time
+generator = torch.Generator().manual_seed(42)
+
+indices = torch.randperm(
+    len(train_dataset_augmented),
+    generator=generator
+).tolist()
+
+
+train_indices = indices[:train_size]
+val_indices = indices[train_size:]
+
+
+# Training subset uses augmented images
+train_dataset = Subset(
+    train_dataset_augmented,
+    train_indices
+)
+
+
+# Validation subset uses clean images
+val_dataset = Subset(
+    train_dataset_clean,
+    val_indices
+)
+
+
+print(f"\nTraining samples: {len(train_dataset)}")
+print(f"Validation samples: {len(val_dataset)}")
+print(f"Test samples: {len(test_dataset)}")
+
+
+# ============================================================
+# 6. DataLoaders
+# ============================================================
+
+batch_size = 64
 
 train_loader = DataLoader(
     train_dataset,
-    batch_size=BATCH_SIZE,
+    batch_size=batch_size,
     shuffle=True
 )
 
 val_loader = DataLoader(
     val_dataset,
-    batch_size=BATCH_SIZE,
+    batch_size=batch_size,
     shuffle=False
 )
 
 test_loader = DataLoader(
     test_dataset,
-    batch_size=BATCH_SIZE,
+    batch_size=batch_size,
     shuffle=False
 )
 
 
 # ============================================================
-# 8. DATASET INFORMATION
-# ============================================================
-
-num_classes = len(
-    train_dataset_augmented.classes
-)
-
-classes = train_dataset_augmented.classes
-
-print("\n--- Dataset Information ---")
-
-print(
-    f"Training images:   {len(train_dataset)}"
-)
-
-print(
-    f"Validation images: {len(val_dataset)}"
-)
-
-print(
-    f"Test images:       {len(test_dataset)}"
-)
-
-print(
-    f"Number of classes: {num_classes}"
-)
-
-
-# ============================================================
-# 9. CNN BLOCK
+# 7. CNN Block
 # ============================================================
 
 class CNNBlock(nn.Module):
 
-    def __init__(
-        self,
-        in_channels,
-        out_channels,
-        kernel_size=3,
-        padding=1
-    ):
+    def __init__(self, in_channels, out_channels):
 
         super().__init__()
 
         self.block = nn.Sequential(
 
+            # First convolution
             nn.Conv2d(
                 in_channels,
                 out_channels,
-                kernel_size,
-                padding=padding
+                kernel_size=3,
+                padding=1
             ),
 
-            nn.BatchNorm2d(
-                out_channels
-            ),
+            nn.BatchNorm2d(out_channels),
 
             nn.ReLU(),
 
-            nn.MaxPool2d(
-                kernel_size=2
-            )
+            # Second convolution
+            nn.Conv2d(
+                out_channels,
+                out_channels,
+                kernel_size=3,
+                padding=1
+            ),
+
+            nn.BatchNorm2d(out_channels),
+
+            nn.ReLU(),
+
+            # Reduce spatial dimensions
+            nn.MaxPool2d(kernel_size=2)
         )
+
 
     def forward(self, x):
 
@@ -232,7 +193,7 @@ class CNNBlock(nn.Module):
 
 
 # ============================================================
-# 10. CNN MODEL
+# 8. Improved CNN Model
 # ============================================================
 
 class SimpleCNN(nn.Module):
@@ -241,41 +202,30 @@ class SimpleCNN(nn.Module):
 
         super().__init__()
 
-        self.conv1_block = CNNBlock(
-            3,
-            32
-        )
 
-        self.conv2_block = CNNBlock(
-            32,
-            64
-        )
+        # Feature extractor
+        self.conv1_block = CNNBlock(3, 64)
 
-        self.conv3_block = CNNBlock(
-            64,
-            128
-        )
+        self.conv2_block = CNNBlock(64, 128)
 
+        self.conv3_block = CNNBlock(128, 256)
+
+
+        # Classification head
         self.classifier = nn.Sequential(
 
             nn.Flatten(),
 
-            nn.Linear(
-                128 * 4 * 4,
-                512
-            ),
+            # 256 × 4 × 4 = 4096
+            nn.Linear(256 * 4 * 4, 512),
 
             nn.ReLU(),
 
-            nn.Dropout(
-                0.5
-            ),
+            nn.Dropout(0.5),
 
-            nn.Linear(
-                512,
-                num_classes
-            )
+            nn.Linear(512, num_classes)
         )
+
 
     def forward(self, x):
 
@@ -291,29 +241,73 @@ class SimpleCNN(nn.Module):
 
 
 # ============================================================
-# 11. TRAINING FUNCTION
+# 9. Create Model
 # ============================================================
 
-def train_epoch(
-    model,
-    train_loader,
-    loss_function,
-    optimizer,
-    device
-):
+num_classes = len(train_dataset_augmented.classes)
+
+model = SimpleCNN(
+    num_classes=num_classes
+)
+
+model = model.to(device)
+
+print("\nModel:")
+print(model)
+
+
+# ============================================================
+# 10. Loss Function and Optimizer
+# ============================================================
+
+criterion = nn.CrossEntropyLoss()
+
+optimizer = optim.Adam(
+    model.parameters(),
+    lr=0.0005,
+    weight_decay=0.0005
+)
+
+
+# ============================================================
+# 11. Training Configuration
+# ============================================================
+
+num_epochs = 50
+
+best_val_accuracy = 0.0
+
+best_model_path = "best_cifar100_cnn_v2.pth"
+
+
+# Store training history
+train_losses = []
+train_accuracies = []
+
+val_losses = []
+val_accuracies = []
+
+
+# ============================================================
+# 12. Training Loop
+# ============================================================
+
+for epoch in range(num_epochs):
+
+    # --------------------------------------------------------
+    # Training
+    # --------------------------------------------------------
 
     model.train()
 
     running_loss = 0.0
-
+    correct = 0
     total = 0
 
-    correct = 0
 
     for images, labels in train_loader:
 
         images = images.to(device)
-
         labels = labels.to(device)
 
 
@@ -326,89 +320,50 @@ def train_epoch(
 
 
         # Calculate loss
-        loss = loss_function(
-            outputs,
-            labels
-        )
+        loss = criterion(outputs, labels)
 
 
         # Backpropagation
         loss.backward()
 
 
-        # Update model parameters
+        # Update weights
         optimizer.step()
 
 
         # Track loss
-        running_loss += (
-            loss.item()
-            * images.size(0)
-        )
+        running_loss += loss.item() * images.size(0)
 
 
-        # Get predicted class
-        _, predicted = torch.max(
-            outputs,
-            1
-        )
+        # Track accuracy
+        _, predicted = torch.max(outputs, 1)
 
-
-        # Track total samples
         total += labels.size(0)
 
-
-        # Track correct predictions
-        correct += (
-            predicted == labels
-        ).sum().item()
+        correct += (predicted == labels).sum().item()
 
 
-    epoch_loss = (
-        running_loss
-        / len(train_loader.dataset)
-    )
+    train_loss = running_loss / total
+
+    train_accuracy = 100 * correct / total
 
 
-    epoch_accuracy = (
-        100.0
-        * correct
-        / total
-    )
-
-
-    return epoch_loss, epoch_accuracy
-
-
-# ============================================================
-# 12. VALIDATION FUNCTION
-# ============================================================
-
-def validate_epoch(
-    model,
-    val_loader,
-    loss_function,
-    device
-):
+    # --------------------------------------------------------
+    # Validation
+    # --------------------------------------------------------
 
     model.eval()
 
-    running_loss = 0.0
+    val_running_loss = 0.0
+    val_correct = 0
+    val_total = 0
 
-    total = 0
-
-    correct = 0
-
-
-    # Disable gradient calculation
-    # because we are not training here.
 
     with torch.no_grad():
 
         for images, labels in val_loader:
 
             images = images.to(device)
-
             labels = labels.to(device)
 
 
@@ -417,485 +372,243 @@ def validate_epoch(
 
 
             # Calculate loss
-            loss = loss_function(
-                outputs,
-                labels
-            )
+            loss = criterion(outputs, labels)
 
 
             # Track loss
-            running_loss += (
-                loss.item()
-                * images.size(0)
-            )
+            val_running_loss += loss.item() * images.size(0)
 
 
-            # Get predictions
-            _, predicted = torch.max(
-                outputs,
-                1
-            )
+            # Track accuracy
+            _, predicted = torch.max(outputs, 1)
+
+            val_total += labels.size(0)
+
+            val_correct += (predicted == labels).sum().item()
 
 
-            # Track samples
-            total += labels.size(0)
+    val_loss = val_running_loss / val_total
+
+    val_accuracy = 100 * val_correct / val_total
 
 
-            # Track correct predictions
-            correct += (
-                predicted == labels
-            ).sum().item()
+    # --------------------------------------------------------
+    # Store history
+    # --------------------------------------------------------
+
+    train_losses.append(train_loss)
+
+    train_accuracies.append(train_accuracy)
+
+    val_losses.append(val_loss)
+
+    val_accuracies.append(val_accuracy)
 
 
-    epoch_loss = (
-        running_loss
-        / len(val_loader.dataset)
+    # --------------------------------------------------------
+    # Save best model
+    # --------------------------------------------------------
+
+    if val_accuracy > best_val_accuracy:
+
+        best_val_accuracy = val_accuracy
+
+        torch.save(
+            model.state_dict(),
+            best_model_path
+        )
+
+        best_marker = " ← Best"
+
+    else:
+
+        best_marker = ""
+
+
+    # --------------------------------------------------------
+    # Print results
+    # --------------------------------------------------------
+
+    print(
+        f"Epoch [{epoch + 1}/{num_epochs}] "
+        f"Train Loss: {train_loss:.4f} "
+        f"Train Accuracy: {train_accuracy:.2f}% "
+        f"Val Loss: {val_loss:.4f} "
+        f"Val Accuracy: {val_accuracy:.2f}%"
+        f"{best_marker}"
     )
 
 
-    epoch_accuracy = (
-        100.0
-        * correct
-        / total
+# ============================================================
+# 13. Load Best Model
+# ============================================================
+
+print("\nTraining complete.")
+
+print(
+    f"Best Validation Accuracy: "
+    f"{best_val_accuracy:.2f}%"
+)
+
+print(
+    f"Loading best model from: "
+    f"{best_model_path}"
+)
+
+
+model.load_state_dict(
+    torch.load(
+        best_model_path,
+        map_location=device
     )
-
-
-    return epoch_loss, epoch_accuracy
+)
 
 
 # ============================================================
-# 13. TRAINING LOOP
+# 14. Final Test Evaluation
 # ============================================================
 
-def training_loop(
-    model,
-    train_loader,
-    val_loader,
-    loss_function,
-    optimizer,
-    device,
-    num_epochs
+model.eval()
+
+test_correct = 0
+test_total = 0
+
+
+with torch.no_grad():
+
+    for images, labels in test_loader:
+
+        images = images.to(device)
+        labels = labels.to(device)
+
+
+        outputs = model(images)
+
+
+        _, predicted = torch.max(outputs, 1)
+
+
+        test_total += labels.size(0)
+
+        test_correct += (
+            predicted == labels
+        ).sum().item()
+
+
+test_accuracy = 100 * test_correct / test_total
+
+
+print(
+    f"\nFinal Test Accuracy: "
+    f"{test_accuracy:.2f}%"
+)
+
+
+# ============================================================
+# 15. Per-Class Accuracy
+# ============================================================
+
+class_correct = [0] * num_classes
+class_total = [0] * num_classes
+
+
+with torch.no_grad():
+
+    for images, labels in test_loader:
+
+        images = images.to(device)
+        labels = labels.to(device)
+
+
+        outputs = model(images)
+
+        _, predicted = torch.max(outputs, 1)
+
+
+        for label, prediction in zip(labels, predicted):
+
+            class_total[label.item()] += 1
+
+            if label == prediction:
+
+                class_correct[label.item()] += 1
+
+
+print("\nPer-Class Accuracy:")
+
+
+for i, class_name in enumerate(
+    test_dataset.classes
 ):
 
-    model.to(device)
+    if class_total[i] > 0:
 
+        accuracy = (
+            100
+            * class_correct[i]
+            / class_total[i]
+        )
 
-    best_val_accuracy = 0.0
+    else:
 
-    best_model_state = None
-
-    best_epoch = 0
-
-
-    train_losses = []
-
-    train_accuracies = []
-
-    val_losses = []
-
-    val_accuracies = []
+        accuracy = 0.0
 
 
     print(
-        f"\nUsing device: {device}"
-    )
-
-    print(
-        "\n--- Training Started ---"
-    )
-
-
-    for epoch in range(num_epochs):
-
-
-        # ----------------------------------------------------
-        # Training
-        # ----------------------------------------------------
-
-        train_loss, train_accuracy = train_epoch(
-            model,
-            train_loader,
-            loss_function,
-            optimizer,
-            device
-        )
-
-
-        # ----------------------------------------------------
-        # Validation
-        # ----------------------------------------------------
-
-        val_loss, val_accuracy = validate_epoch(
-            model,
-            val_loader,
-            loss_function,
-            device
-        )
-
-
-        # ----------------------------------------------------
-        # Store metrics
-        # ----------------------------------------------------
-
-        train_losses.append(
-            train_loss
-        )
-
-        train_accuracies.append(
-            train_accuracy
-        )
-
-        val_losses.append(
-            val_loss
-        )
-
-        val_accuracies.append(
-            val_accuracy
-        )
-
-
-        # ----------------------------------------------------
-        # Print results
-        # ----------------------------------------------------
-
-        print(
-            f"Epoch [{epoch + 1}/{num_epochs}] "
-            f"Train Loss: {train_loss:.4f} "
-            f"Train Accuracy: {train_accuracy:.2f}% "
-            f"Val Loss: {val_loss:.4f} "
-            f"Val Accuracy: {val_accuracy:.2f}%"
-        )
-
-
-        # ----------------------------------------------------
-        # Save best model
-        # ----------------------------------------------------
-
-        if val_accuracy > best_val_accuracy:
-
-            best_val_accuracy = val_accuracy
-
-            best_epoch = epoch + 1
-
-            best_model_state = copy.deepcopy(
-                model.state_dict()
-            )
-
-
-    # ========================================================
-    # TRAINING FINISHED
-    # ========================================================
-
-    print(
-        "\n--- Finished Training ---"
-    )
-
-
-    # Restore best validation model
-    if best_model_state is not None:
-
-        model.load_state_dict(
-            best_model_state
-        )
-
-
-        print(
-            "\n--- Returning best model ---"
-        )
-
-        print(
-            f"Best validation accuracy: "
-            f"{best_val_accuracy:.2f}%"
-        )
-
-        print(
-            f"Achieved at epoch: "
-            f"{best_epoch}"
-        )
-
-
-    metrics = {
-
-        "train_losses":
-            train_losses,
-
-        "train_accuracies":
-            train_accuracies,
-
-        "val_losses":
-            val_losses,
-
-        "val_accuracies":
-            val_accuracies
-    }
-
-
-    return model, metrics
-
-
-# ============================================================
-# 14. FINAL TEST EVALUATION
-# ============================================================
-
-def evaluate_model(
-    model,
-    test_loader,
-    device
-):
-
-    model.eval()
-
-    total = 0
-
-    correct = 0
-
-
-    with torch.no_grad():
-
-        for images, labels in test_loader:
-
-            images = images.to(device)
-
-            labels = labels.to(device)
-
-
-            outputs = model(images)
-
-
-            _, predicted = torch.max(
-                outputs,
-                1
-            )
-
-
-            total += labels.size(0)
-
-
-            correct += (
-                predicted == labels
-            ).sum().item()
-
-
-    accuracy = (
-        100.0
-        * correct
-        / total
-    )
-
-
-    return accuracy
-
-
-# ============================================================
-# 15. PER-CLASS ACCURACY
-# ============================================================
-
-def calculate_class_accuracy(
-    model,
-    test_loader,
-    classes,
-    device
-):
-
-    model.eval()
-
-
-    correct = [0] * len(classes)
-
-    total = [0] * len(classes)
-
-
-    with torch.no_grad():
-
-        for images, labels in test_loader:
-
-            images = images.to(device)
-
-            labels = labels.to(device)
-
-
-            outputs = model(images)
-
-
-            _, predictions = torch.max(
-                outputs,
-                1
-            )
-
-
-            for label, prediction in zip(
-                labels,
-                predictions
-            ):
-
-                label_index = (
-                    label.item()
-                )
-
-
-                total[label_index] += 1
-
-
-                if (
-                    label_index
-                    == prediction.item()
-                ):
-
-                    correct[label_index] += 1
-
-
-    class_accuracies = {}
-
-
-    for i, class_name in enumerate(classes):
-
-        if total[i] > 0:
-
-            accuracy = (
-                100.0
-                * correct[i]
-                / total[i]
-            )
-
-        else:
-
-            accuracy = 0.0
-
-
-        class_accuracies[
-            class_name
-        ] = accuracy
-
-
-    return class_accuracies
-
-
-# ============================================================
-# 16. MAIN
-# ============================================================
-
-def main():
-
-    # --------------------------------------------------------
-    # Create model
-    # --------------------------------------------------------
-
-    model = SimpleCNN(
-        num_classes=num_classes
-    )
-
-
-    # --------------------------------------------------------
-    # Loss function
-    # --------------------------------------------------------
-
-    loss_function = nn.CrossEntropyLoss()
-
-
-    # --------------------------------------------------------
-    # Optimizer
-    # --------------------------------------------------------
-
-    optimizer = optim.Adam(
-        model.parameters(),
-        lr=LEARNING_RATE,
-        weight_decay=WEIGHT_DECAY
-    )
-
-
-    # --------------------------------------------------------
-    # Train model
-    # --------------------------------------------------------
-
-    trained_model, metrics = training_loop(
-
-        model=model,
-
-        train_loader=train_loader,
-
-        val_loader=val_loader,
-
-        loss_function=loss_function,
-
-        optimizer=optimizer,
-
-        device=device,
-
-        num_epochs=NUM_EPOCHS
-    )
-
-
-    # ========================================================
-    # FINAL TEST EVALUATION
-    # ========================================================
-
-    print(
-        "\n--- Final Test Evaluation ---"
-    )
-
-
-    test_accuracy = evaluate_model(
-        trained_model,
-        test_loader,
-        device
-    )
-
-
-    print(
-        f"Final Test Accuracy: "
-        f"{test_accuracy:.2f}%"
-    )
-
-
-    # ========================================================
-    # PER-CLASS ACCURACY
-    # ========================================================
-
-    class_accuracies = calculate_class_accuracy(
-
-        trained_model,
-
-        test_loader,
-
-        classes,
-
-        device
-    )
-
-
-    print(
-        "\n--- Per-Class Accuracy ---\n"
-    )
-
-
-    for class_name, accuracy in class_accuracies.items():
-
-        print(
-            f"{class_name:15s}: "
-            f"{accuracy:.2f}%"
-        )
-
-
-    # ========================================================
-    # SAVE MODEL
-    # ========================================================
-
-    torch.save(
-        trained_model.state_dict(),
-        "simple_cnn_cifar100.pth"
-    )
-
-
-    print(
-        "\nModel saved as "
-        "simple_cnn_cifar100.pth"
+        f"{class_name:15s}: "
+        f"{accuracy:.2f}%"
     )
 
 
 # ============================================================
-# 17. RUN PROGRAM
+# 16. Plot Training and Validation Loss
 # ============================================================
 
-if __name__ == "__main__":
+plt.figure(figsize=(10, 5))
 
-    main()
+plt.plot(
+    train_losses,
+    label="Training Loss"
+)
+
+plt.plot(
+    val_losses,
+    label="Validation Loss"
+)
+
+plt.xlabel("Epoch")
+
+plt.ylabel("Loss")
+
+plt.title("Training and Validation Loss")
+
+plt.legend()
+
+plt.show()
+
+
+# ============================================================
+# 17. Plot Training and Validation Accuracy
+# ============================================================
+
+plt.figure(figsize=(10, 5))
+
+plt.plot(
+    train_accuracies,
+    label="Training Accuracy"
+)
+
+plt.plot(
+    val_accuracies,
+    label="Validation Accuracy"
+)
+
+plt.xlabel("Epoch")
+
+plt.ylabel("Accuracy (%)")
+
+plt.title("Training and Validation Accuracy")
+
+plt.legend()
+
+plt.show()
