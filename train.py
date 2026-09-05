@@ -1,6 +1,6 @@
 # ============================================================
-# CIFAR-100 CNN Classifier - Version 2
-# Improved CNN with deeper convolutional blocks
+# CIFAR-100 Transfer Learning with ResNet-18
+# Version 3
 # ============================================================
 
 import torch
@@ -9,6 +9,7 @@ import torch.optim as optim
 
 from torch.utils.data import DataLoader, Subset
 from torchvision import datasets, transforms
+from torchvision.models import resnet18, ResNet18_Weights
 
 import matplotlib.pyplot as plt
 
@@ -17,36 +18,68 @@ import matplotlib.pyplot as plt
 # 1. Device
 # ============================================================
 
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device(
+    "cuda" if torch.cuda.is_available() else "cpu"
+)
 
 print(f"Using device: {device}")
 
 
 # ============================================================
-# 2. Normalization
+# 2. ImageNet Normalization
 # ============================================================
 
-mean = (0.5071, 0.4867, 0.4408)
-std = (0.2675, 0.2565, 0.2761)
+# ResNet-18 was pretrained using ImageNet normalization.
+# We use the normalization expected by the pretrained weights.
+
+imagenet_mean = (
+    0.485,
+    0.456,
+    0.406
+)
+
+imagenet_std = (
+    0.229,
+    0.224,
+    0.225
+)
 
 
 # ============================================================
 # 3. Data Transforms
 # ============================================================
 
-# Augmentation used only for training
+# Training augmentation
 train_transform = transforms.Compose([
+
+    # CIFAR-100 images are 32x32.
+    # Resize them to 224x224 for standard ResNet input.
+    transforms.Resize((224, 224)),
+
     transforms.RandomHorizontalFlip(),
+
     transforms.RandomRotation(15),
+
     transforms.ToTensor(),
-    transforms.Normalize(mean=mean, std=std)
+
+    transforms.Normalize(
+        mean=imagenet_mean,
+        std=imagenet_std
+    )
 ])
 
 
-# No augmentation for validation/test
+# Validation and test preprocessing
 val_test_transform = transforms.Compose([
+
+    transforms.Resize((224, 224)),
+
     transforms.ToTensor(),
-    transforms.Normalize(mean=mean, std=std)
+
+    transforms.Normalize(
+        mean=imagenet_mean,
+        std=imagenet_std
+    )
 ])
 
 
@@ -63,8 +96,8 @@ train_dataset_augmented = datasets.CIFAR100(
 )
 
 
-# Same 50,000 training images, but without augmentation
-# This dataset is used to create the validation set.
+# Same 50,000 training images without augmentation
+# Used to create the validation set.
 train_dataset_clean = datasets.CIFAR100(
     root="./data",
     train=True,
@@ -83,13 +116,12 @@ test_dataset = datasets.CIFAR100(
 
 
 # ============================================================
-# 5. Create Train / Validation Split
+# 5. Train / Validation Split
 # ============================================================
 
 train_size = 45000
 val_size = 5000
 
-# Fixed seed so the same split is created every time
 generator = torch.Generator().manual_seed(42)
 
 indices = torch.randperm(
@@ -97,19 +129,19 @@ indices = torch.randperm(
     generator=generator
 ).tolist()
 
-
 train_indices = indices[:train_size]
+
 val_indices = indices[train_size:]
 
 
-# Training subset uses augmented images
+# Training subset
 train_dataset = Subset(
     train_dataset_augmented,
     train_indices
 )
 
 
-# Validation subset uses clean images
+# Validation subset
 val_dataset = Subset(
     train_dataset_clean,
     val_indices
@@ -147,125 +179,57 @@ test_loader = DataLoader(
 
 
 # ============================================================
-# 7. CNN Block
+# 7. Load Pretrained ResNet-18
 # ============================================================
 
-class CNNBlock(nn.Module):
+weights = ResNet18_Weights.DEFAULT
 
-    def __init__(self, in_channels, out_channels):
-
-        super().__init__()
-
-        self.block = nn.Sequential(
-
-            # First convolution
-            nn.Conv2d(
-                in_channels,
-                out_channels,
-                kernel_size=3,
-                padding=1
-            ),
-
-            nn.BatchNorm2d(out_channels),
-
-            nn.ReLU(),
-
-            # Second convolution
-            nn.Conv2d(
-                out_channels,
-                out_channels,
-                kernel_size=3,
-                padding=1
-            ),
-
-            nn.BatchNorm2d(out_channels),
-
-            nn.ReLU(),
-
-            # Reduce spatial dimensions
-            nn.MaxPool2d(kernel_size=2)
-        )
-
-
-    def forward(self, x):
-
-        return self.block(x)
-
-
-# ============================================================
-# 8. Improved CNN Model
-# ============================================================
-
-class SimpleCNN(nn.Module):
-
-    def __init__(self, num_classes):
-
-        super().__init__()
-
-
-        # Feature extractor
-        self.conv1_block = CNNBlock(3, 64)
-
-        self.conv2_block = CNNBlock(64, 128)
-
-        self.conv3_block = CNNBlock(128, 256)
-
-
-        # Classification head
-        self.classifier = nn.Sequential(
-
-            nn.Flatten(),
-
-            # 256 × 4 × 4 = 4096
-            nn.Linear(256 * 4 * 4, 512),
-
-            nn.ReLU(),
-
-            nn.Dropout(0.5),
-
-            nn.Linear(512, num_classes)
-        )
-
-
-    def forward(self, x):
-
-        x = self.conv1_block(x)
-
-        x = self.conv2_block(x)
-
-        x = self.conv3_block(x)
-
-        x = self.classifier(x)
-
-        return x
-
-
-# ============================================================
-# 9. Create Model
-# ============================================================
-
-num_classes = len(train_dataset_augmented.classes)
-
-model = SimpleCNN(
-    num_classes=num_classes
+model = resnet18(
+    weights=weights
 )
 
+
+# ============================================================
+# 8. Replace the Original Classifier
+# ============================================================
+
+# ResNet-18 originally produces predictions for 1000 ImageNet
+# classes. CIFAR-100 has only 100 classes.
+
+num_features = model.fc.in_features
+
+model.fc = nn.Linear(
+    num_features,
+    100
+)
+
+
+# Move model to GPU/CPU
 model = model.to(device)
+
 
 print("\nModel:")
 print(model)
 
 
 # ============================================================
-# 10. Loss Function and Optimizer
+# 9. Loss Function
 # ============================================================
 
 criterion = nn.CrossEntropyLoss()
 
+
+# ============================================================
+# 10. Optimizer
+# ============================================================
+
+# We use a smaller learning rate because the model already
+# contains pretrained weights.
+
 optimizer = optim.Adam(
     model.parameters(),
-    lr=0.0005,
-    weight_decay=0.0005
+    lr=0.0001,
+    weight_decay=0.0001
 )
 
 
@@ -273,14 +237,16 @@ optimizer = optim.Adam(
 # 11. Training Configuration
 # ============================================================
 
-num_epochs = 50
+num_epochs = 20
 
 best_val_accuracy = 0.0
 
-best_model_path = "best_cifar100_cnn_v2.pth"
+best_model_path = (
+    "best_cifar100_resnet18.pth"
+)
 
 
-# Store training history
+# Training history
 train_losses = []
 train_accuracies = []
 
@@ -301,17 +267,20 @@ for epoch in range(num_epochs):
     model.train()
 
     running_loss = 0.0
+
     correct = 0
+
     total = 0
 
 
     for images, labels in train_loader:
 
         images = images.to(device)
+
         labels = labels.to(device)
 
 
-        # Clear previous gradients
+        # Clear gradients
         optimizer.zero_grad()
 
 
@@ -320,32 +289,46 @@ for epoch in range(num_epochs):
 
 
         # Calculate loss
-        loss = criterion(outputs, labels)
+        loss = criterion(
+            outputs,
+            labels
+        )
 
 
         # Backpropagation
         loss.backward()
 
 
-        # Update weights
+        # Update model weights
         optimizer.step()
 
 
         # Track loss
-        running_loss += loss.item() * images.size(0)
+        running_loss += (
+            loss.item() * images.size(0)
+        )
 
 
         # Track accuracy
-        _, predicted = torch.max(outputs, 1)
+        _, predicted = torch.max(
+            outputs,
+            1
+        )
 
         total += labels.size(0)
 
-        correct += (predicted == labels).sum().item()
+        correct += (
+            predicted == labels
+        ).sum().item()
 
 
-    train_loss = running_loss / total
+    train_loss = (
+        running_loss / total
+    )
 
-    train_accuracy = 100 * correct / total
+    train_accuracy = (
+        100 * correct / total
+    )
 
 
     # --------------------------------------------------------
@@ -355,7 +338,9 @@ for epoch in range(num_epochs):
     model.eval()
 
     val_running_loss = 0.0
+
     val_correct = 0
+
     val_total = 0
 
 
@@ -364,6 +349,7 @@ for epoch in range(num_epochs):
         for images, labels in val_loader:
 
             images = images.to(device)
+
             labels = labels.to(device)
 
 
@@ -372,24 +358,38 @@ for epoch in range(num_epochs):
 
 
             # Calculate loss
-            loss = criterion(outputs, labels)
+            loss = criterion(
+                outputs,
+                labels
+            )
 
 
-            # Track loss
-            val_running_loss += loss.item() * images.size(0)
+            # Track validation loss
+            val_running_loss += (
+                loss.item() * images.size(0)
+            )
 
 
-            # Track accuracy
-            _, predicted = torch.max(outputs, 1)
+            # Track validation accuracy
+            _, predicted = torch.max(
+                outputs,
+                1
+            )
 
             val_total += labels.size(0)
 
-            val_correct += (predicted == labels).sum().item()
+            val_correct += (
+                predicted == labels
+            ).sum().item()
 
 
-    val_loss = val_running_loss / val_total
+    val_loss = (
+        val_running_loss / val_total
+    )
 
-    val_accuracy = 100 * val_correct / val_total
+    val_accuracy = (
+        100 * val_correct / val_total
+    )
 
 
     # --------------------------------------------------------
@@ -398,11 +398,15 @@ for epoch in range(num_epochs):
 
     train_losses.append(train_loss)
 
-    train_accuracies.append(train_accuracy)
+    train_accuracies.append(
+        train_accuracy
+    )
 
     val_losses.append(val_loss)
 
-    val_accuracies.append(val_accuracy)
+    val_accuracies.append(
+        val_accuracy
+    )
 
 
     # --------------------------------------------------------
@@ -471,6 +475,7 @@ model.load_state_dict(
 model.eval()
 
 test_correct = 0
+
 test_total = 0
 
 
@@ -479,13 +484,17 @@ with torch.no_grad():
     for images, labels in test_loader:
 
         images = images.to(device)
+
         labels = labels.to(device)
 
 
         outputs = model(images)
 
 
-        _, predicted = torch.max(outputs, 1)
+        _, predicted = torch.max(
+            outputs,
+            1
+        )
 
 
         test_total += labels.size(0)
@@ -495,7 +504,9 @@ with torch.no_grad():
         ).sum().item()
 
 
-test_accuracy = 100 * test_correct / test_total
+test_accuracy = (
+    100 * test_correct / test_total
+)
 
 
 print(
@@ -508,7 +519,10 @@ print(
 # 15. Per-Class Accuracy
 # ============================================================
 
+num_classes = 100
+
 class_correct = [0] * num_classes
+
 class_total = [0] * num_classes
 
 
@@ -517,21 +531,30 @@ with torch.no_grad():
     for images, labels in test_loader:
 
         images = images.to(device)
+
         labels = labels.to(device)
 
 
         outputs = model(images)
 
-        _, predicted = torch.max(outputs, 1)
+        _, predicted = torch.max(
+            outputs,
+            1
+        )
 
 
-        for label, prediction in zip(labels, predicted):
+        for label, prediction in zip(
+            labels,
+            predicted
+        ):
 
             class_total[label.item()] += 1
 
             if label == prediction:
 
-                class_correct[label.item()] += 1
+                class_correct[
+                    label.item()
+                ] += 1
 
 
 print("\nPer-Class Accuracy:")
@@ -561,7 +584,7 @@ for i, class_name in enumerate(
 
 
 # ============================================================
-# 16. Plot Training and Validation Loss
+# 16. Plot Loss
 # ============================================================
 
 plt.figure(figsize=(10, 5))
@@ -580,7 +603,9 @@ plt.xlabel("Epoch")
 
 plt.ylabel("Loss")
 
-plt.title("Training and Validation Loss")
+plt.title(
+    "ResNet-18 Training and Validation Loss"
+)
 
 plt.legend()
 
@@ -588,7 +613,7 @@ plt.show()
 
 
 # ============================================================
-# 17. Plot Training and Validation Accuracy
+# 17. Plot Accuracy
 # ============================================================
 
 plt.figure(figsize=(10, 5))
@@ -607,7 +632,9 @@ plt.xlabel("Epoch")
 
 plt.ylabel("Accuracy (%)")
 
-plt.title("Training and Validation Accuracy")
+plt.title(
+    "ResNet-18 Training and Validation Accuracy"
+)
 
 plt.legend()
 
